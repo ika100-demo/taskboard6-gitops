@@ -36,7 +36,9 @@ metadata:
 spec:
   generators:
   - list:
-      elements: []
+      elements:
+      - name: taskboard6-api
+      - name: taskboard6-web
   template:
     metadata:
       name: '{{name}}-staging'
@@ -135,6 +137,64 @@ spec:
       destination:
         server: https://kubernetes.default.svc
         namespace: taskboard6-dev
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+        - CreateNamespace=true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: taskboard6-addons-staging
+  namespace: argocd
+spec:
+  generators:
+  - list:
+      elements:
+      - name: postgres
+  template:
+    metadata:
+      name: addon-{{name}}-staging
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/ika100-demo/taskboard6-gitops
+        targetRevision: main
+        path: applications/taskboard6/addons/staging/{{name}}
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: taskboard6-staging
+      syncPolicy:
+        automated:
+          prune: false
+          selfHeal: true
+        syncOptions:
+        - CreateNamespace=true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: taskboard6-addons-config-staging
+  namespace: argocd
+spec:
+  generators:
+  - list:
+      elements:
+      - name: observability
+  template:
+    metadata:
+      name: addon-{{name}}-staging
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/ika100-demo/taskboard6-gitops
+        targetRevision: main
+        path: applications/taskboard6/addons/staging/{{name}}
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: taskboard6-staging
       syncPolicy:
         automated:
           prune: true
