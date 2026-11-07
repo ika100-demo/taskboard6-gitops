@@ -3,63 +3,106 @@ plan_id: 001-persistent-tasks-and-task-ui
 spec: 001-persistent-tasks-and-task-ui
 feature: Tasks survive restarts (in-cluster Postgres) and can be listed and created in the web app
 gitops_app: ika100-demo/taskboard6-gitops
-status: draft
+status: completed
 repos:
-  - id: taskboard6-gitops
-    shape: gitops-app
-    summary: Declare the system's Postgres, give it to the API and point the web app at the API
-    acs: [AC-001.1, AC-001.3]
-    gitops:
-      - {resource: postgres}
-      - {uses: postgres, component: taskboard6-api}
-      - {env: {TASKBOARD6_API_URL: 'http://taskboard6-api'}, component: taskboard6-web}
-    depends_on: []
-    done: false
-  - id: taskboard6-api
-    shape: service-python
-    summary: Store tasks in Postgres and answer 503 and not-ready while the database is unreachable
-    acs: [AC-001.1, AC-001.2]
-    criteria:
-      - "Given tasks A, B and C were created through `POST /tasks` in that order, when the service is stopped and started again with the same `DATABASE_URL` and a client sends `GET /tasks`, then the response is `200` with exactly A, B, C in that order, each with the same `id`, `title`, `due_date` and `created_at` (to the microsecond) returned by its `POST /tasks` (system AC-001.1)"
-      - "Given tasks were created in one service process, when a second service process using the same `DATABASE_URL` answers `GET /tasks`, then it returns the same tasks in the same creation order (system AC-001.1)"
-      - "Given a running service with a reachable database, when a client uses `POST /tasks` and `GET /tasks`, then paths, fields, trimming, the 1 to 200 character title rule, the `YYYY-MM-DD` due date rule and the `422` error shape behave exactly as in taskboard6-api spec 001 (system AC-001.1)"
-      - "Given the database is unreachable, when a client sends `POST /tasks` with a valid body, then the response is `503` with JSON body `{\"detail\": \"Task storage is unavailable\"}` within 5 seconds, and once the database is reachable again `GET /tasks` does not contain that task (system AC-001.2)"
-      - "Given the database is unreachable, when a client sends `GET /tasks`, then the response is `503` with JSON body `{\"detail\": \"Task storage is unavailable\"}` within 5 seconds (system AC-001.2)"
-      - "Given the database is unreachable, when the readiness endpoint `GET /ready` is called, then it answers `503` with JSON `{\"status\": \"not ready\"}`, while `GET /health` still answers `200` (system AC-001.2)"
-      - "Given the service started while the database was unreachable, when the database becomes reachable, then without a restart `GET /ready` answers `200` and `POST /tasks` and `GET /tasks` work again, the schema being created on first use (system AC-001.2)"
-    arguments: |
-      Config: `DATABASE_URL` (injected by the gitops-app's `uses: postgres`, also `PG*`); the service must start and
-      keep `/health` green when it is unset or the database is down (then `/ready` and the task routes answer 503).
-      Suggested: psycopg 3 with psycopg_pool, an idempotent `CREATE TABLE IF NOT EXISTS` on the first successful
-      connection (no migration tool needed for one table). Table `tasks`: `seq bigserial primary key`, `id text unique`
-      (UUID string), `title text not null`, `due_date date null`, `created_at timestamptz not null`; list
-      `ORDER BY seq` so ties in `created_at` keep creation order. Keep the TaskStore seam so the route code stays.
-      Tests need a real Postgres (devbox service or testcontainers); "restart" = a new app instance on the same DB;
-      "unreachable" = a DATABASE_URL pointing at a closed port. In-memory tasks are not migrated (spec A2).
-    depends_on: [taskboard6-gitops]
-    done: false
-  - id: taskboard6-web
-    shape: web-nextjs
-    summary: Task page at the root URL - list tasks with due dates and create a task with a form
-    acs: [AC-001.3, AC-001.4, AC-001.5, AC-001.6, AC-001.7, AC-001.8]
-    criteria:
-      - "Given the API's `GET /tasks` returns tasks, when a user opens `/`, then the page shows one list item per task in the returned order, each with its title and its `due_date` as `YYYY-MM-DD`, or the text \"No due date\" when `due_date` is `null` (system AC-001.3, AC-001.6)"
-      - "Given the API's `GET /tasks` returns `[]`, when a user opens `/`, then the page shows \"No tasks yet\" and the create form with the fields labelled \"Title\" and \"Due date\" and the button \"Add task\" (system AC-001.4)"
-      - "Given `/` is open, when the user enters the title \"Buy milk\" and the due date 2026-12-31 and presses \"Add task\", then within 5 seconds and without a page reload the task \"Buy milk\" with \"2026-12-31\" appears as the last list item, both fields are empty, and the API's `GET /tasks` contains it (system AC-001.5)"
-      - "Given `/` is open, when the user submits a title with the due date left empty, then the request to the API carries `due_date: null` and the new list item shows \"No due date\" (system AC-001.6)"
-      - "Given `/` is open, when the user submits a title that is empty or only whitespace, then \"Please enter a title.\" is shown next to the title field, the entered values stay, and no request reaches the API; for a title longer than 200 characters after trimming the message is \"The title must be at most 200 characters.\" (system AC-001.7)"
-      - "Given the API answers `POST /tasks` with `422` naming `title`, when the user submits, then the API's message is shown next to the title field and the entered values stay (system AC-001.7)"
-      - "Given the API is unreachable, slower than 3 seconds or answers `GET /tasks` with a `5xx`, when a user opens `/`, then the page loads with status `200` and shows \"Tasks could not be loaded. Please try again later.\" instead of the list (system AC-001.8)"
-      - "Given the API is unreachable, slower than 3 seconds or answers `POST /tasks` with a `5xx` or any status the contract does not list, when the user submits the form, then the page shows \"The task could not be saved. Please try again.\" and keeps the entered values (system AC-001.8)"
-    arguments: |
-      Config: `TASKBOARD6_API_URL` (server-side only, never `NEXT_PUBLIC_*`; set by the gitops-app to
-      `http://taskboard6-api`); document it in docs/env-vars.md. Replace the starter page. The browser never calls the
-      API directly: `/` is a dynamic Server Component that fetches `GET /tasks`; the form (client component) posts to
-      the web app's own `POST /api/tasks` route handler, which forwards to the API (see Contract). `/api/ready` must not
-      depend on the API (the page must load while the API is down). Tests: mock the API in Vitest; e2e against a stub
-      API server; smoke: page loads (`@smoke`), create a `smoke-<uuid>` task (`@smoke @writes`).
-    depends_on: [taskboard6-gitops]
-    done: false
+- id: taskboard6-gitops
+  shape: gitops-app
+  summary: Declare the system's Postgres, give it to the API and point the web app at the API
+  acs:
+  - AC-001.1
+  - AC-001.3
+  gitops:
+  - resource: postgres
+  - uses: postgres
+    component: taskboard6-api
+  - env:
+      TASKBOARD6_API_URL: http://taskboard6-api
+    component: taskboard6-web
+  depends_on: []
+  done: true
+- id: taskboard6-api
+  shape: service-python
+  summary: Store tasks in Postgres and answer 503 and not-ready while the database is unreachable
+  acs:
+  - AC-001.1
+  - AC-001.2
+  criteria:
+  - Given tasks A, B and C were created through `POST /tasks` in that order, when the service is stopped
+    and started again with the same `DATABASE_URL` and a client sends `GET /tasks`, then the response
+    is `200` with exactly A, B, C in that order, each with the same `id`, `title`, `due_date` and `created_at`
+    (to the microsecond) returned by its `POST /tasks` (system AC-001.1)
+  - Given tasks were created in one service process, when a second service process using the same `DATABASE_URL`
+    answers `GET /tasks`, then it returns the same tasks in the same creation order (system AC-001.1)
+  - Given a running service with a reachable database, when a client uses `POST /tasks` and `GET /tasks`,
+    then paths, fields, trimming, the 1 to 200 character title rule, the `YYYY-MM-DD` due date rule and
+    the `422` error shape behave exactly as in taskboard6-api spec 001 (system AC-001.1)
+  - 'Given the database is unreachable, when a client sends `POST /tasks` with a valid body, then the
+    response is `503` with JSON body `{"detail": "Task storage is unavailable"}` within 5 seconds, and
+    once the database is reachable again `GET /tasks` does not contain that task (system AC-001.2)'
+  - 'Given the database is unreachable, when a client sends `GET /tasks`, then the response is `503` with
+    JSON body `{"detail": "Task storage is unavailable"}` within 5 seconds (system AC-001.2)'
+  - 'Given the database is unreachable, when the readiness endpoint `GET /ready` is called, then it answers
+    `503` with JSON `{"status": "not ready"}`, while `GET /health` still answers `200` (system AC-001.2)'
+  - Given the service started while the database was unreachable, when the database becomes reachable,
+    then without a restart `GET /ready` answers `200` and `POST /tasks` and `GET /tasks` work again, the
+    schema being created on first use (system AC-001.2)
+  arguments: |
+    Config: `DATABASE_URL` (injected by the gitops-app's `uses: postgres`, also `PG*`); the service must start and
+    keep `/health` green when it is unset or the database is down (then `/ready` and the task routes answer 503).
+    Suggested: psycopg 3 with psycopg_pool, an idempotent `CREATE TABLE IF NOT EXISTS` on the first successful
+    connection (no migration tool needed for one table). Table `tasks`: `seq bigserial primary key`, `id text unique`
+    (UUID string), `title text not null`, `due_date date null`, `created_at timestamptz not null`; list
+    `ORDER BY seq` so ties in `created_at` keep creation order. Keep the TaskStore seam so the route code stays.
+    Tests need a real Postgres (devbox service or testcontainers); "restart" = a new app instance on the same DB;
+    "unreachable" = a DATABASE_URL pointing at a closed port. In-memory tasks are not migrated (spec A2).
+  depends_on:
+  - taskboard6-gitops
+  done: true
+- id: taskboard6-web
+  shape: web-nextjs
+  summary: Task page at the root URL - list tasks with due dates and create a task with a form
+  acs:
+  - AC-001.3
+  - AC-001.4
+  - AC-001.5
+  - AC-001.6
+  - AC-001.7
+  - AC-001.8
+  criteria:
+  - Given the API's `GET /tasks` returns tasks, when a user opens `/`, then the page shows one list item
+    per task in the returned order, each with its title and its `due_date` as `YYYY-MM-DD`, or the text
+    "No due date" when `due_date` is `null` (system AC-001.3, AC-001.6)
+  - Given the API's `GET /tasks` returns `[]`, when a user opens `/`, then the page shows "No tasks yet"
+    and the create form with the fields labelled "Title" and "Due date" and the button "Add task" (system
+    AC-001.4)
+  - Given `/` is open, when the user enters the title "Buy milk" and the due date 2026-12-31 and presses
+    "Add task", then within 5 seconds and without a page reload the task "Buy milk" with "2026-12-31"
+    appears as the last list item, both fields are empty, and the API's `GET /tasks` contains it (system
+    AC-001.5)
+  - 'Given `/` is open, when the user submits a title with the due date left empty, then the request to
+    the API carries `due_date: null` and the new list item shows "No due date" (system AC-001.6)'
+  - Given `/` is open, when the user submits a title that is empty or only whitespace, then "Please enter
+    a title." is shown next to the title field, the entered values stay, and no request reaches the API;
+    for a title longer than 200 characters after trimming the message is "The title must be at most 200
+    characters." (system AC-001.7)
+  - Given the API answers `POST /tasks` with `422` naming `title`, when the user submits, then the API's
+    message is shown next to the title field and the entered values stay (system AC-001.7)
+  - Given the API is unreachable, slower than 3 seconds or answers `GET /tasks` with a `5xx`, when a user
+    opens `/`, then the page loads with status `200` and shows "Tasks could not be loaded. Please try
+    again later." instead of the list (system AC-001.8)
+  - Given the API is unreachable, slower than 3 seconds or answers `POST /tasks` with a `5xx` or any status
+    the contract does not list, when the user submits the form, then the page shows "The task could not
+    be saved. Please try again." and keeps the entered values (system AC-001.8)
+  arguments: |
+    Config: `TASKBOARD6_API_URL` (server-side only, never `NEXT_PUBLIC_*`; set by the gitops-app to
+    `http://taskboard6-api`); document it in docs/env-vars.md. Replace the starter page. The browser never calls the
+    API directly: `/` is a dynamic Server Component that fetches `GET /tasks`; the form (client component) posts to
+    the web app's own `POST /api/tasks` route handler, which forwards to the API (see Contract). `/api/ready` must not
+    depend on the API (the page must load while the API is down). Tests: mock the API in Vitest; e2e against a stub
+    API server; smoke: page loads (`@smoke`), create a `smoke-<uuid>` task (`@smoke @writes`).
+  depends_on:
+  - taskboard6-gitops
+  done: true
 gitops_pin: []
 ---
 
