@@ -1,7 +1,7 @@
 ---
 spec_id: 001-persistent-tasks-and-task-ui
 title: Persistent tasks and task UI
-status: approved
+status: done
 priority: P1
 shape: gitops-app
 ---
@@ -62,3 +62,5 @@ As a team member, I want to create a task with a title and an optional due date 
 
 - 2026-11-07 created
 - 2026-11-07 approved
+- 2026-11-07 building
+- 2026-11-07 done
